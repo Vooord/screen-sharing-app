@@ -19,8 +19,8 @@ type ParticipantRole
 
 
 type Role
-    = SpeakerRole
-    | ParticipantRole
+    = SpeakerVariant SpeakerRole
+    | ParticipantVariant ParticipantRole
 
 
 type alias ParticipantRoleData =
@@ -34,6 +34,7 @@ type alias SpeakerRoleData =
 type Model
     = LoadingRole
     | RoleFailed
+    | MalformedRole
     | LoadingSharingConfig SpeakerRoleData
     | WaitingForTranslation ParticipantRoleData
     | WaitingForStartSharing SpeakerRoleData (List String)
@@ -57,7 +58,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         GotRole (Ok roleBit) ->
-            handleGotRole roleBit
+            handleGotRole ( roleBit, model )
 
         GotRole (Err _) ->
             ( RoleFailed, Cmd.none )
@@ -74,23 +75,17 @@ update msg model =
             ( model, Cmd.none )
 
 
-handleGotRole : Int -> ( Model, Cmd Msg )
-handleGotRole roleBit =
-    let
-        isSpeaker =
-            determineRole roleBit == SpeakerRole
-    in
-    ( if isSpeaker then
-        LoadingSharingConfig { role = Speaker }
+handleGotRole : ( Int, Model ) -> ( Model, Cmd Msg )
+handleGotRole ( roleBit, model ) =
+    case determineRole roleBit of
+        Just (SpeakerVariant s) ->
+            ( LoadingSharingConfig { role = s }, requestSharingConfig )
 
-      else
-        WaitingForTranslation { role = Participant }
-    , if isSpeaker then
-        requestSharingConfig
+        Just (ParticipantVariant p) ->
+            ( WaitingForTranslation { role = p }, Cmd.none )
 
-      else
-        Cmd.none
-    )
+        Nothing ->
+            ( MalformedRole, Cmd.none )
 
 
 
@@ -102,6 +97,9 @@ view model =
     case model of
         LoadingRole ->
             div [] [ text "Loading role..." ]
+
+        MalformedRole ->
+            div [] [ text "Can't determine the role received from server :(" ]
 
         RoleFailed ->
             div [] [ text "Failed to load role :(" ]
@@ -136,7 +134,7 @@ requestRole =
     Http.get
         { url = buildApiPath "current_role"
 
-        --    it's might be better to use
+        --    it might be better to use
         --    expect = Http.expectBytes GotRole DecodeBytes.unsignedInt8
         , expect = Http.expectJson GotRole DecodeJson.int
         }
@@ -154,13 +152,16 @@ requestSharingConfig =
 -- utils --
 
 
-determineRole : Int -> Role
+determineRole : Int -> Maybe Role
 determineRole roleBit =
     if roleBit == 1 then
-        SpeakerRole
+        Just (SpeakerVariant Speaker)
+
+    else if roleBit == 0 then
+        Just (ParticipantVariant Participant)
 
     else
-        ParticipantRole
+        Nothing
 
 
 
