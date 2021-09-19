@@ -7,37 +7,117 @@ import Json.Decode as DecodeJson exposing (Decoder)
 
 
 
----- MODEL ----
+-- Role --
 
 
-type SpeakerRole
+type SpeakerType
     = Speaker
 
 
-type ParticipantRole
+type ParticipantType
     = Participant
 
 
 type Role
-    = SpeakerVariant SpeakerRole
-    | ParticipantVariant ParticipantRole
+    = SpeakerVariant SpeakerType
+    | ParticipantVariant ParticipantType
 
 
-type alias ParticipantRoleData =
-    { role : ParticipantRole }
+determineRole : Int -> Maybe Role
+determineRole roleBit =
+    if roleBit == 1 then
+        Just (SpeakerVariant Speaker)
+
+    else if roleBit == 0 then
+        Just (ParticipantVariant Participant)
+
+    else
+        Nothing
 
 
-type alias SpeakerRoleData =
-    { role : SpeakerRole }
+handleGotRole : ( Int, Model ) -> ( Model, Cmd Msg )
+handleGotRole ( roleBit, _ ) =
+    case determineRole roleBit of
+        Just (SpeakerVariant s) ->
+            ( LoadingSharingConfig s, requestSharingConfig )
+
+        Just (ParticipantVariant p) ->
+            ( WaitingForTranslation p, Cmd.none )
+
+        Nothing ->
+            ( InvalidRole, Cmd.none )
+
+
+
+-- Sharing Config --
+
+
+type WebRTCType
+    = WebRTC
+
+
+type VNCType
+    = VNC
+
+
+type alias WebRTCPriorData =
+    { p1 : WebRTCType
+    , p2 : VNCType
+    }
+
+
+type alias VNCPriorData =
+    { p1 : VNCType
+    , p2 : WebRTCType
+    }
+
+
+type Prior
+    = WebRTCPrior WebRTCPriorData
+    | VNCPrior VNCPriorData
+
+
+determinePrior : List String -> Maybe Prior
+determinePrior config =
+    case config of
+        [ "WebRTC", "VNC" ] ->
+            Just <| WebRTCPrior <| WebRTCPriorData WebRTC VNC
+
+        [ "VNC", "WebRTC" ] ->
+            Just <| VNCPrior <| VNCPriorData VNC WebRTC
+
+        _ ->
+            Nothing
+
+
+handleGotSharingConfig : ( List String, Model ) -> ( Model, Cmd Msg )
+handleGotSharingConfig ( config, model ) =
+    case model of
+        LoadingSharingConfig roleData ->
+            case determinePrior config of
+                Just prior ->
+                    ( WaitingForStartSharing roleData prior, Cmd.none )
+
+                Nothing ->
+                    ( SharingConfigFailed, Cmd.none )
+
+        _ ->
+            ( InvalidSharingConfig, Cmd.none )
+
+
+
+---- MODEL ----
 
 
 type Model
     = LoadingRole
     | RoleFailed
-    | MalformedRole
-    | LoadingSharingConfig SpeakerRoleData
-    | WaitingForTranslation ParticipantRoleData
-    | WaitingForStartSharing SpeakerRoleData (List String)
+    | InvalidRole
+    | LoadingSharingConfig SpeakerType
+    | SharingConfigFailed
+    | InvalidSharingConfig
+    | WaitingForTranslation ParticipantType
+    | WaitingForStartSharing SpeakerType Prior
 
 
 init : ( Model, Cmd Msg )
@@ -64,28 +144,10 @@ update msg model =
             ( RoleFailed, Cmd.none )
 
         GotSharingConfig (Ok sharingConfig) ->
-            case model of
-                LoadingSharingConfig roleData ->
-                    ( WaitingForStartSharing roleData sharingConfig, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
+            handleGotSharingConfig ( sharingConfig, model )
 
         GotSharingConfig (Err _) ->
-            ( model, Cmd.none )
-
-
-handleGotRole : ( Int, Model ) -> ( Model, Cmd Msg )
-handleGotRole ( roleBit, model ) =
-    case determineRole roleBit of
-        Just (SpeakerVariant s) ->
-            ( LoadingSharingConfig { role = s }, requestSharingConfig )
-
-        Just (ParticipantVariant p) ->
-            ( WaitingForTranslation { role = p }, Cmd.none )
-
-        Nothing ->
-            ( MalformedRole, Cmd.none )
+            ( SharingConfigFailed, Cmd.none )
 
 
 
@@ -98,14 +160,20 @@ view model =
         LoadingRole ->
             div [] [ text "Loading role..." ]
 
-        MalformedRole ->
-            div [] [ text "Can't determine the role received from server :(" ]
-
         RoleFailed ->
             div [] [ text "Failed to load role :(" ]
 
+        InvalidRole ->
+            div [] [ text "Can't determine the role received from server :(" ]
+
         LoadingSharingConfig _ ->
             div [] [ text "Loading sharing config..." ]
+
+        SharingConfigFailed ->
+            div [] [ text "Failed to load screen sharing config :(" ]
+
+        InvalidSharingConfig ->
+            div [] [ text "Can't determine the screen sharing config received from server :(" ]
 
         WaitingForTranslation _ ->
             -- TODO: make canvas
@@ -146,22 +214,6 @@ requestSharingConfig =
         { url = buildApiPath "sharing_config"
         , expect = Http.expectJson GotSharingConfig (DecodeJson.list DecodeJson.string)
         }
-
-
-
--- utils --
-
-
-determineRole : Int -> Maybe Role
-determineRole roleBit =
-    if roleBit == 1 then
-        Just (SpeakerVariant Speaker)
-
-    else if roleBit == 0 then
-        Just (ParticipantVariant Participant)
-
-    else
-        Nothing
 
 
 
