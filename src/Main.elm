@@ -2,8 +2,11 @@ module Main exposing (..)
 
 import Browser
 import Html exposing (..)
+import Html.Attributes exposing (disabled)
+import Html.Events exposing (onClick)
 import Http
 import Json.Decode as DecodeJson exposing (Decoder)
+import Json.Encode as EncodeJson
 
 
 
@@ -60,31 +63,36 @@ type VNCType
     = VNC
 
 
-type alias WebRTCPriorData =
+type SharingConfigType
+    = WebRTCVariant WebRTCType
+    | VNCVariant VNCType
+
+
+type alias WebRTCPriorityData =
     { p1 : WebRTCType
     , p2 : VNCType
     }
 
 
-type alias VNCPriorData =
+type alias VNCPriorityData =
     { p1 : VNCType
     , p2 : WebRTCType
     }
 
 
-type Prior
-    = WebRTCPrior WebRTCPriorData
-    | VNCPrior VNCPriorData
+type Priority
+    = WebRTCPriorityVariant WebRTCPriorityData
+    | VNCPriorityVariant VNCPriorityData
 
 
-determinePrior : List String -> Maybe Prior
-determinePrior config =
+determinePriority : List String -> Maybe Priority
+determinePriority config =
     case config of
         [ "WebRTC", "VNC" ] ->
-            Just <| WebRTCPrior <| WebRTCPriorData WebRTC VNC
+            Just <| WebRTCPriorityVariant <| WebRTCPriorityData WebRTC VNC
 
         [ "VNC", "WebRTC" ] ->
-            Just <| VNCPrior <| VNCPriorData VNC WebRTC
+            Just <| VNCPriorityVariant <| VNCPriorityData VNC WebRTC
 
         _ ->
             Nothing
@@ -94,9 +102,9 @@ handleGotSharingConfig : ( List String, Model ) -> ( Model, Cmd Msg )
 handleGotSharingConfig ( config, model ) =
     case model of
         LoadingSharingConfig roleData ->
-            case determinePrior config of
-                Just prior ->
-                    ( WaitingForStartSharing roleData prior, Cmd.none )
+            case determinePriority config of
+                Just priority ->
+                    ( WaitingForStart <| WaitingForStartData roleData priority False, Cmd.none )
 
                 Nothing ->
                     ( SharingConfigFailed, Cmd.none )
@@ -105,8 +113,48 @@ handleGotSharingConfig ( config, model ) =
             ( InvalidSharingConfig, Cmd.none )
 
 
+configToString : SharingConfigType -> String
+configToString ct =
+    case ct of
+        WebRTCVariant _ ->
+            "WebRTC"
+
+        VNCVariant _ ->
+            "VNC"
+
+
+getConfig : ( Priority, Bool ) -> SharingConfigType
+getConfig ( p, fallback ) =
+    case p of
+        WebRTCPriorityVariant { p1, p2 } ->
+            if fallback then
+                VNCVariant p2
+
+            else
+                WebRTCVariant p1
+
+        VNCPriorityVariant { p1, p2 } ->
+            if fallback then
+                WebRTCVariant p2
+
+            else
+                VNCVariant p1
+
+
 
 ---- MODEL ----
+
+
+type alias WaitingForStartData =
+    { role : SpeakerType, priority : Priority, error : Bool }
+
+
+type alias LoadingStartData =
+    { role : SpeakerType, priority : Priority, fallback : Bool }
+
+
+type alias StartSharingDoneData =
+    { role : SpeakerType, priority : Priority, platform : String }
 
 
 type Model
@@ -117,7 +165,9 @@ type Model
     | SharingConfigFailed
     | InvalidSharingConfig
     | WaitingForTranslation ParticipantType
-    | WaitingForStartSharing SpeakerType Prior
+    | WaitingForStart WaitingForStartData
+    | LoadingStart LoadingStartData
+    | StartSharingDone StartSharingDoneData
 
 
 init : ( Model, Cmd Msg )
@@ -132,6 +182,8 @@ init =
 type Msg
     = GotRole (Result Http.Error Int)
     | GotSharingConfig (Result Http.Error (List String))
+    | StartSharing SpeakerType Priority
+    | StartConfirmed (Result Http.Error String)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -148,6 +200,33 @@ update msg model =
 
         GotSharingConfig (Err _) ->
             ( SharingConfigFailed, Cmd.none )
+
+        StartSharing s p ->
+            let
+                fallback =
+                    False
+            in
+            ( LoadingStart <| LoadingStartData s p fallback, startSharing ( p, fallback ) )
+
+        StartConfirmed (Ok mobileFlag) ->
+            case model of
+                LoadingStart { role, priority } ->
+                    ( StartSharingDone <| StartSharingDoneData role priority mobileFlag, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        StartConfirmed (Err _) ->
+            case model of
+                LoadingStart { role, priority, fallback } ->
+                    if fallback then
+                        ( WaitingForStart <| WaitingForStartData role priority True, Cmd.none )
+
+                    else
+                        ( LoadingStart <| LoadingStartData role priority True, startSharing ( priority, True ) )
+
+                _ ->
+                    ( model, Cmd.none )
 
 
 
@@ -179,8 +258,24 @@ view model =
             -- TODO: make canvas
             div [] [ text "Waiting for translation..." ]
 
-        WaitingForStartSharing _ _ ->
-            div [] [ button [] [ text "Start" ] ]
+        WaitingForStart { role, priority, error } ->
+            div []
+                [ button [ onClick <| StartSharing role priority ] [ text "Start" ]
+                , if error then
+                    div [] [ text "Failed to confirm sharing start. Please, try again." ]
+
+                  else
+                    div [] []
+                ]
+
+        LoadingStart _ ->
+            div []
+                [ button [ disabled True ] [ text "Start" ]
+                , div [] [ text "Requesting confirmation from server..." ]
+                ]
+
+        StartSharingDone _ ->
+            div [] [ text "Start Sharing Done!" ]
 
 
 
@@ -189,7 +284,7 @@ view model =
 
 apiHost : String
 apiHost =
-    "https://vord1-elm.free.beeceptor.com"
+    "https://vord-elm1.free.beeceptor.com"
 
 
 buildApiPath : String -> String
@@ -214,6 +309,32 @@ requestSharingConfig =
         { url = buildApiPath "sharing_config"
         , expect = Http.expectJson GotSharingConfig (DecodeJson.list DecodeJson.string)
         }
+
+
+startSharing : ( Priority, Bool ) -> Cmd Msg
+startSharing ( priority, fallback ) =
+    case priority of
+        WebRTCPriorityVariant p ->
+            Http.post
+                { url = buildApiPath "start_sharing"
+                , body =
+                    Http.jsonBody <|
+                        EncodeJson.string <|
+                            configToString <|
+                                getConfig ( WebRTCPriorityVariant p, fallback )
+                , expect = Http.expectJson StartConfirmed DecodeJson.string
+                }
+
+        VNCPriorityVariant p ->
+            Http.post
+                { url = buildApiPath "start_sharing"
+                , body =
+                    Http.jsonBody <|
+                        EncodeJson.string <|
+                            configToString <|
+                                getConfig ( VNCPriorityVariant p, fallback )
+                , expect = Http.expectJson StartConfirmed DecodeJson.string
+                }
 
 
 
