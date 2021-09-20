@@ -103,8 +103,8 @@ handleGotSharingConfig ( config, model ) =
     case model of
         LoadingSharingConfig roleData ->
             case determinePriority config of
-                Just priority ->
-                    ( WaitingForStart <| WaitingForStartData roleData priority False, Cmd.none )
+                Just p ->
+                    ( WaitingForStart <| { role = roleData, priority = p, error = Nothing }, Cmd.none )
 
                 Nothing ->
                     ( SharingConfigFailed, Cmd.none )
@@ -142,19 +142,66 @@ getConfig ( p, fallback ) =
 
 
 
----- MODEL ----
+-- StartSharing --
+
+
+type alias SpeakerWithPriority extends =
+    { extends | role : SpeakerType, priority : Priority }
 
 
 type alias WaitingForStartData =
-    { role : SpeakerType, priority : Priority, error : Bool }
+    SpeakerWithPriority { error : Maybe String }
 
 
 type alias LoadingStartData =
-    { role : SpeakerType, priority : Priority, fallback : Bool }
+    SpeakerWithPriority { fallback : Bool }
 
 
-type alias StartSharingDoneData =
-    { role : SpeakerType, priority : Priority, platform : String }
+type MobileType
+    = Mobile
+
+
+type DesktopType
+    = Desktop
+
+
+type Platform
+    = MobileVariant MobileType
+    | DesktopVariant DesktopType
+
+
+handleStartError : Model -> ( Model, Cmd Msg )
+handleStartError model =
+    case model of
+        LoadingStart { role, priority, fallback } ->
+            if fallback then
+                ( WaitingForStart <| { role = role, priority = priority, error = Just "Failed to confirm sharing start." }, Cmd.none )
+
+            else
+                ( LoadingStart <| { role = role, priority = priority, fallback = True }, startSharing ( priority, True ) )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+
+-- Waiting for Sharing --
+
+
+type alias Screen =
+    { title : String, id : String }
+
+
+type alias MobileSharingData =
+    SpeakerWithPriority { platform : MobileType, current : Screen, paused : Bool }
+
+
+type alias ScreensAndWindows =
+    { screens : List Screen, windows : List Screen }
+
+
+
+---- MODEL ----
 
 
 type Model
@@ -167,7 +214,9 @@ type Model
     | WaitingForTranslation ParticipantType
     | WaitingForStart WaitingForStartData
     | LoadingStart LoadingStartData
-    | StartSharingDone StartSharingDoneData
+    | LoadingScreens (SpeakerWithPriority {})
+    | MobileSharing MobileSharingData
+    | WaitingForScreenSelect
 
 
 init : ( Model, Cmd Msg )
@@ -183,7 +232,9 @@ type Msg
     = GotRole (Result Http.Error Int)
     | GotSharingConfig (Result Http.Error (List String))
     | StartSharing SpeakerType Priority
-    | StartConfirmed (Result Http.Error String)
+    | WebRTCConfirmed (Result Http.Error ())
+    | VNCConfirmed (Result Http.Error Int)
+    | GotScreens (Result Http.Error ScreensAndWindows)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -206,24 +257,54 @@ update msg model =
                 fallback =
                     False
             in
-            ( LoadingStart <| LoadingStartData s p fallback, startSharing ( p, fallback ) )
+            ( LoadingStart <| { role = s, priority = p, fallback = fallback }, startSharing ( p, fallback ) )
 
-        StartConfirmed (Ok mobileFlag) ->
+        WebRTCConfirmed (Ok _) ->
             case model of
                 LoadingStart { role, priority } ->
-                    ( StartSharingDone <| StartSharingDoneData role priority mobileFlag, Cmd.none )
+                    -- TODO
+                    ( WaitingForScreenSelect, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
 
-        StartConfirmed (Err _) ->
+        VNCConfirmed (Ok mobileFlag) ->
             case model of
-                LoadingStart { role, priority, fallback } ->
-                    if fallback then
-                        ( WaitingForStart <| WaitingForStartData role priority True, Cmd.none )
+                LoadingStart { role, priority } ->
+                    case mobileFlag of
+                        -- TODO
+                        0 ->
+                            ( LoadingScreens { role = role, priority = priority }, Cmd.none )
 
-                    else
-                        ( LoadingStart <| LoadingStartData role priority True, startSharing ( priority, True ) )
+                        -- TODO
+                        1 ->
+                            ( MobileSharing <| { role = role, priority = priority, platform = Mobile, current = { title = "Mobile display", id = "0" }, paused = False }, Cmd.none )
+
+                        _ ->
+                            ( WaitingForStart <| { role = role, priority = priority, error = Just "Can't determine the platform." }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        WebRTCConfirmed (Err _) ->
+            handleStartError model
+
+        VNCConfirmed (Err _) ->
+            handleStartError model
+
+        GotScreens (Ok screens) ->
+            case model of
+                -- TODO
+                LoadingScreens _ ->
+                    ( WaitingForScreenSelect, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotScreens (Err _) ->
+            case model of
+                LoadingScreens { role, priority } ->
+                    ( WaitingForStart <| { role = role, priority = priority, error = Just "Failed to get screens and windows." }, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -261,11 +342,12 @@ view model =
         WaitingForStart { role, priority, error } ->
             div []
                 [ button [ onClick <| StartSharing role priority ] [ text "Start" ]
-                , if error then
-                    div [] [ text "Failed to confirm sharing start. Please, try again." ]
+                , case error of
+                    Just e ->
+                        div [] [ text <| e ++ " Please, try again." ]
 
-                  else
-                    div [] []
+                    Nothing ->
+                        div [] []
                 ]
 
         LoadingStart _ ->
@@ -274,8 +356,22 @@ view model =
                 , div [] [ text "Requesting confirmation from server..." ]
                 ]
 
-        StartSharingDone _ ->
-            div [] [ text "Start Sharing Done!" ]
+        LoadingScreens _ ->
+            div []
+                [ button [ disabled True ] [ text "Start" ]
+                , div [] [ text "Loading screens and windows..." ]
+                ]
+
+        -- TODO
+        MobileSharing data ->
+            div [] [ text "Mobile screen sharing:" ]
+
+        -- TODO
+        WaitingForScreenSelect ->
+            div []
+                [ button [] [ text "Stop" ]
+                , text "Select screen / Select window"
+                ]
 
 
 
@@ -313,28 +409,53 @@ requestSharingConfig =
 
 startSharing : ( Priority, Bool ) -> Cmd Msg
 startSharing ( priority, fallback ) =
+    let
+        url =
+            buildApiPath "start_sharing"
+    in
     case priority of
         WebRTCPriorityVariant p ->
             Http.post
-                { url = buildApiPath "start_sharing"
-                , body =
-                    Http.jsonBody <|
-                        EncodeJson.string <|
-                            configToString <|
-                                getConfig ( WebRTCPriorityVariant p, fallback )
-                , expect = Http.expectJson StartConfirmed DecodeJson.string
+                { url = url
+                , body = getStartSharingBody ( WebRTCPriorityVariant p, fallback )
+                , expect = Http.expectWhatever WebRTCConfirmed
                 }
 
         VNCPriorityVariant p ->
             Http.post
-                { url = buildApiPath "start_sharing"
-                , body =
-                    Http.jsonBody <|
-                        EncodeJson.string <|
-                            configToString <|
-                                getConfig ( VNCPriorityVariant p, fallback )
-                , expect = Http.expectJson StartConfirmed DecodeJson.string
+                { url = url
+                , body = getStartSharingBody ( VNCPriorityVariant p, fallback )
+                , expect = Http.expectJson VNCConfirmed DecodeJson.int
                 }
+
+
+getStartSharingBody : ( Priority, Bool ) -> Http.Body
+getStartSharingBody ( p, f ) =
+    Http.jsonBody <|
+        EncodeJson.string <|
+            configToString <|
+                getConfig ( p, f )
+
+
+requestScreens : Cmd Msg
+requestScreens =
+    -- here should be userId param
+    Http.get
+        { url = buildApiPath "screens"
+        , expect = Http.expectJson GotScreens decodeScreens
+        }
+
+
+decodeScreens : Decoder ScreensAndWindows
+decodeScreens =
+    DecodeJson.map2 ScreensAndWindows
+        (DecodeJson.field "screens" <| DecodeJson.list decodeScreen)
+        (DecodeJson.field "windows" <| DecodeJson.list decodeScreen)
+
+
+decodeScreen : Decoder Screen
+decodeScreen =
+    DecodeJson.map2 Screen (DecodeJson.field "title" DecodeJson.string) (DecodeJson.field "id" DecodeJson.string)
 
 
 
