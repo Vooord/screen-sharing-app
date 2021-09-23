@@ -9,7 +9,7 @@ type Priority
     | VNC_WebRTC Bool
 
 
-type alias PriorityAlias extends =
+type alias ExtendablePriority extends =
     { extends | priority : Priority }
 
 

@@ -7,7 +7,8 @@ import Html.Events exposing (onClick)
 import Http
 import Json.Decode as DecodeJson exposing (Decoder)
 import Json.Encode as EncodeJson
-import Stuff.Priority exposing (Priority(..), PriorityAlias, determinePriority, priorityToString)
+import Stuff.Priority exposing (ExtendablePriority, Priority(..), determinePriority, priorityToString)
+import Stuff.Transmission as Transmission exposing (Screen, Transmission, isMobile, mobileScreens, webRTCScreens)
 
 
 
@@ -18,11 +19,11 @@ type Model
     = LoadingConfig
     | LoadingConfigFailed
     | InvalidConfig
-    | WaitingForStart WaitingForStartData
-    | LoadingStart LoadingStartData
-    | LoadingScreens (PriorityAlias {})
-    | MobileSharing MobileSharingData
-    | WaitingForScreenSelect
+    | WaitingForStart (ExtendablePriority { error : Maybe String })
+    | LoadingStart (ExtendablePriority {})
+    | LoadingScreens (ExtendablePriority {})
+    | MobileSharing Transmission
+    | DesktopSharing Transmission
 
 
 init : ( Model, Cmd Msg )
@@ -55,34 +56,22 @@ update msg model =
             ( LoadingStart { priority = priority }, startSharing priority )
 
         ( WebRTCConfirmed (Ok _), LoadingStart { priority } ) ->
-            -- TODO
-            ( WaitingForScreenSelect, Cmd.none )
-
-        ( VNCConfirmed (Ok mobileFlag), LoadingStart { priority } ) ->
-            case mobileFlag of
-                -- TODO
-                0 ->
-                    ( LoadingScreens { priority = priority }, Cmd.none )
-
-                -- TODO
-                1 ->
-                    ( MobileSharing <| { priority = priority, platform = Mobile, current = { title = "Mobile display", id = "0" }, paused = False }, Cmd.none )
-
-                _ ->
-                    ( WaitingForStart <| { priority = priority, error = Just "Can't determine the platform." }, Cmd.none )
+            handleTransmissionInit ( Transmission.init { mobile = False, screens = webRTCScreens, windows = Nothing }, priority )
 
         ( WebRTCConfirmed (Err _), LoadingStart { priority } ) ->
             handleStartError priority
 
+        ( VNCConfirmed (Ok mobileFlag), LoadingStart { priority } ) ->
+            handleVNCConfirmed ( mobileFlag, priority )
+
         ( VNCConfirmed (Err _), LoadingStart { priority } ) ->
             handleStartError priority
 
-        ( GotScreens (Ok screens), LoadingScreens _ ) ->
-            -- TODO
-            ( WaitingForScreenSelect, Cmd.none )
+        ( GotScreens (Ok { screens, windows }), LoadingScreens { priority } ) ->
+            handleTransmissionInit ( Transmission.init { mobile = False, screens = screens, windows = Just windows }, priority )
 
         ( GotScreens (Err _), LoadingScreens { priority } ) ->
-            ( WaitingForStart <| { priority = priority, error = Just "Failed to get screens and windows." }, Cmd.none )
+            ( WaitingForStart { priority = priority, error = Just "Failed to get screens and windows." }, Cmd.none )
 
         ( _, _ ) ->
             ( model, Cmd.none )
@@ -106,7 +95,7 @@ view model =
 
         WaitingForStart { priority, error } ->
             div []
-                [ button [ onClick <| StartSharing ] [ text "Start" ]
+                [ button [ onClick StartSharing ] [ text "Start" ]
                 , case error of
                     Just e ->
                         div [] [ text <| e ++ " Please, try again." ]
@@ -128,11 +117,11 @@ view model =
                 ]
 
         -- TODO
-        MobileSharing data ->
+        MobileSharing t ->
             div [] [ text "Mobile screen sharing:" ]
 
         -- TODO
-        WaitingForScreenSelect ->
+        DesktopSharing t ->
             div []
                 [ button [] [ text "Stop" ]
                 , text "Select screen / Select window"
@@ -155,7 +144,7 @@ handleGotSharingConfig : List String -> ( Model, Cmd Msg )
 handleGotSharingConfig rawConfig =
     case determinePriority rawConfig of
         Just p ->
-            ( WaitingForStart <| { priority = p, error = Nothing }, Cmd.none )
+            ( WaitingForStart { priority = p, error = Nothing }, Cmd.none )
 
         Nothing ->
             ( InvalidConfig, Cmd.none )
@@ -163,27 +152,6 @@ handleGotSharingConfig rawConfig =
 
 
 -- Start Sharing --
-
-
-type alias WaitingForStartData =
-    PriorityAlias { error : Maybe String }
-
-
-type alias LoadingStartData =
-    PriorityAlias {}
-
-
-type MobileType
-    = Mobile
-
-
-type DesktopType
-    = Desktop
-
-
-type Platform
-    = MobileVariant MobileType
-    | DesktopVariant DesktopType
 
 
 startSharing : Priority -> Cmd Msg
@@ -232,23 +200,40 @@ handleStartError priority =
 
 
 
--- Waiting for Sharing --
-
-
-type alias Screen =
-    { title : String, id : String }
-
-
-type alias MobileSharingData =
-    PriorityAlias { platform : MobileType, current : Screen, paused : Bool }
+-- Sharing --
 
 
 type alias ScreensAndWindows =
     { screens : List Screen, windows : List Screen }
 
 
+handleVNCConfirmed : ( Int, Priority ) -> ( Model, Cmd Msg )
+handleVNCConfirmed ( mobileFlag, priority ) =
+    case mobileFlag of
+        0 ->
+            ( LoadingScreens { priority = priority }, requestScreens )
 
--- API --
+        1 ->
+            handleTransmissionInit ( Transmission.init { mobile = True, screens = mobileScreens, windows = Nothing }, priority )
+
+        _ ->
+            ( WaitingForStart { priority = priority, error = Just "Can't determine the VNC platform." }, Cmd.none )
+
+
+handleTransmissionInit : ( Maybe Transmission, Priority ) -> ( Model, Cmd Msg )
+handleTransmissionInit ( transmission, priority ) =
+    case transmission of
+        Just t ->
+            ( if isMobile t then
+                MobileSharing t
+
+              else
+                DesktopSharing t
+            , Cmd.none
+            )
+
+        Nothing ->
+            ( WaitingForStart { priority = priority, error = Just "Failed to init the Transmission." }, Cmd.none )
 
 
 requestScreens : Cmd Msg
