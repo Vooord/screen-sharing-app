@@ -7,7 +7,7 @@ import Html.Events exposing (onClick)
 import Http
 import Json.Decode as DecodeJson exposing (Decoder)
 import Json.Encode as EncodeJson
-import Stuff.Priority exposing (ExtendablePriority, Priority(..), determinePriority, priorityToString)
+import Stuff.Priority exposing (Priority(..), PriorityMap, WithPriority, determinePriority, priorityToString)
 import Stuff.Transmission as Transmission exposing (Screen, Transmission, isMobile, mobileScreens, webRTCScreens)
 
 
@@ -19,9 +19,9 @@ type Model
     = LoadingConfig
     | LoadingConfigFailed
     | InvalidConfig
-    | WaitingForStart (ExtendablePriority { error : Maybe String })
-    | LoadingStart (ExtendablePriority {})
-    | LoadingScreens (ExtendablePriority {})
+    | WaitingForStart (WithPriority { error : Maybe String })
+    | LoadingStart PriorityMap
+    | LoadingScreens PriorityMap
     | MobileSharing Transmission
     | DesktopSharing Transmission
 

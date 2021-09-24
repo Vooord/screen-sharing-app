@@ -9,8 +9,12 @@ type Priority
     | VNC_WebRTC Bool
 
 
-type alias ExtendablePriority extends =
+type alias WithPriority extends =
     { extends | priority : Priority }
+
+
+type alias PriorityMap =
+    WithPriority {}
 
 
 determinePriority : List String -> Maybe Priority

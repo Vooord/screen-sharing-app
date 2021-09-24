@@ -15,8 +15,7 @@ import Presenter
 
 type Model
     = LoadingRole
-    | RoleFailed
-    | InvalidRole
+    | RoleFailed String
     | PresenterModel Presenter.Model
     | ParticipantModel Participant.Model
 
@@ -42,31 +41,22 @@ update msg model =
         ( GotRole (Ok roleBit), LoadingRole ) ->
             case roleBit of
                 1 ->
-                    handleSubUpdate PresenterModel GotPresenterMsg Presenter.init
+                    Tuple.mapBoth PresenterModel (Cmd.map GotPresenterMsg) Presenter.init
 
                 0 ->
-                    handleSubUpdate ParticipantModel GotParticipantMsg Participant.init
+                    Tuple.mapBoth ParticipantModel (Cmd.map GotParticipantMsg) Participant.init
 
                 _ ->
-                    ( InvalidRole, Cmd.none )
+                    ( RoleFailed "Can't determine the role received from server :(", Cmd.none )
 
         ( GotRole (Err _), LoadingRole ) ->
-            ( RoleFailed, Cmd.none )
+            ( RoleFailed "Failed to load the role :(", Cmd.none )
 
         ( GotPresenterMsg subMsg, PresenterModel subModel ) ->
-            handleSubUpdate PresenterModel GotPresenterMsg <| Presenter.update subMsg subModel
+            Tuple.mapBoth PresenterModel (Cmd.map GotPresenterMsg) <| Presenter.update subMsg subModel
 
         ( _, _ ) ->
             ( model, Cmd.none )
-
-
-handleSubUpdate : (subModel -> Model) -> (subMsg -> Msg) -> ( subModel, Cmd subMsg ) -> ( Model, Cmd Msg )
-handleSubUpdate modelBuilder msgBuilder subUpdate =
-    let
-        ( subModel, subCmd ) =
-            subUpdate
-    in
-    ( modelBuilder subModel, Cmd.map msgBuilder subCmd )
 
 
 
@@ -79,11 +69,8 @@ view model =
         LoadingRole ->
             div [] [ text "Loading role..." ]
 
-        RoleFailed ->
-            div [] [ text "Failed to load role :(" ]
-
-        InvalidRole ->
-            div [] [ text "Can't determine the role received from server :(" ]
+        RoleFailed error ->
+            div [] [ text error ]
 
         PresenterModel subModel ->
             Html.map GotPresenterMsg <| Presenter.view subModel
