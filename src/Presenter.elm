@@ -7,12 +7,20 @@ import Html.Events exposing (onClick)
 import Http
 import Json.Decode as DecodeJson exposing (Decoder)
 import Json.Encode as EncodeJson
-import Stuff.Priority exposing (Priority(..), PriorityMap, WithPriority, determinePriority, priorityToString)
-import Stuff.Transmission as Transmission exposing (Screen, Transmission, isMobile, mobileScreens, webRTCScreens)
+import Stuff.Mocks exposing (mobileScreens, webRTCScreens)
+import Stuff.Modal as M exposing (Modal, ModalTab(..))
+import Stuff.Pause as Pause exposing (PauseToggle)
+import Stuff.Priority as P exposing (Priority(..), PriorityMap, WithPriority)
+import Stuff.Transmission as T exposing (Screen, Transmission)
+import Stuff.Utils exposing (viewIf, viewJust, viewListJust)
 
 
 
 ---- MODEL ----
+
+
+type alias DesktopSharingData =
+    { t : Transmission, m : Modal, p : PriorityMap }
 
 
 type Model
@@ -21,9 +29,10 @@ type Model
     | InvalidConfig
     | WaitingForStart (WithPriority { error : Maybe String })
     | LoadingStart PriorityMap
+    | LoadingStop PriorityMap
     | LoadingScreens PriorityMap
-    | MobileSharing Transmission
-    | DesktopSharing Transmission
+    | MobileSharing { t : Transmission, p : PriorityMap }
+    | DesktopSharing DesktopSharingData
 
 
 init : ( Model, Cmd Msg )
@@ -35,12 +44,24 @@ init =
 ---- UPDATE ----
 
 
+type alias ScreenSelectedData =
+    { screen : Screen, isWindow : Bool }
+
+
 type Msg
     = GotSharingConfig (Result Http.Error (List String))
     | StartSharing
+    | StopSharing
+    | StopConfirmed (Result Http.Error ())
     | WebRTCConfirmed (Result Http.Error ())
     | VNCConfirmed (Result Http.Error Int)
     | GotScreens (Result Http.Error ScreensAndWindows)
+    | ToggleModal (Maybe ModalTab)
+    | ChangeModalTab ModalTab
+    | ScreenSelected { screen : Screen, isWindow : Bool }
+    | ScreenConfirmed (Result Http.Error ())
+    | PauseToggle PauseToggle
+    | PauseConfirmed PauseToggle
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -55,23 +76,47 @@ update msg model =
         ( StartSharing, WaitingForStart { priority } ) ->
             ( LoadingStart { priority = priority }, startSharing priority )
 
-        ( WebRTCConfirmed (Ok _), LoadingStart { priority } ) ->
-            handleTransmissionInit ( Transmission.init { mobile = False, screens = webRTCScreens, windows = Nothing }, priority )
+        ( StopSharing, DesktopSharing { p } ) ->
+            ( LoadingStop p, stopSharing )
+
+        ( StopConfirmed _, LoadingStop { priority } ) ->
+            ( WaitingForStart { priority = priority, error = Nothing }, Cmd.none )
+
+        ( WebRTCConfirmed (Ok _), LoadingStart p ) ->
+            handleTransmissionInit ( T.init { mobile = False, screens = webRTCScreens, windows = Nothing }, p )
 
         ( WebRTCConfirmed (Err _), LoadingStart { priority } ) ->
             handleStartError priority
 
-        ( VNCConfirmed (Ok mobileFlag), LoadingStart { priority } ) ->
-            handleVNCConfirmed ( mobileFlag, priority )
+        ( VNCConfirmed (Ok mobileFlag), LoadingStart p ) ->
+            handleVNCConfirmed ( mobileFlag, p )
 
         ( VNCConfirmed (Err _), LoadingStart { priority } ) ->
             handleStartError priority
 
-        ( GotScreens (Ok { screens, windows }), LoadingScreens { priority } ) ->
-            handleTransmissionInit ( Transmission.init { mobile = False, screens = screens, windows = Just windows }, priority )
+        ( GotScreens (Ok { screens, windows }), LoadingScreens p ) ->
+            handleTransmissionInit ( T.init { mobile = False, screens = screens, windows = Just windows }, p )
 
         ( GotScreens (Err _), LoadingScreens { priority } ) ->
             ( WaitingForStart { priority = priority, error = Just "Failed to get screens and windows." }, Cmd.none )
+
+        ( ToggleModal tab, DesktopSharing sharing ) ->
+            ( DesktopSharing { sharing | m = M.init tab }, Cmd.none )
+
+        ( ChangeModalTab tab, DesktopSharing sharing ) ->
+            ( DesktopSharing { sharing | m = M.changeTab sharing.m tab }, Cmd.none )
+
+        ( ScreenSelected ssData, DesktopSharing dsData ) ->
+            handleScreenSelected ssData dsData
+
+        ( ScreenConfirmed _, DesktopSharing sharing ) ->
+            ( DesktopSharing { sharing | t = T.confirmSharing sharing.t }, Cmd.none )
+
+        ( PauseToggle toggle, DesktopSharing sharing ) ->
+            ( DesktopSharing { sharing | t = T.waitForPause sharing.t toggle }, requestPause toggle )
+
+        ( PauseConfirmed toggle, DesktopSharing sharing ) ->
+            ( DesktopSharing { sharing | t = T.pauseSwitch sharing.t toggle }, Cmd.none )
 
         ( _, _ ) ->
             ( model, Cmd.none )
@@ -116,16 +161,84 @@ view model =
                 , div [] [ text "Loading screens and windows..." ]
                 ]
 
+        LoadingStop _ ->
+            div []
+                [ button [ disabled True ] [ text "Stop" ]
+                , div [] [ text "Requesting stop sharing confirmation..." ]
+                ]
+
+        DesktopSharing { t, m, p } ->
+            let
+                waitingForConfirmation =
+                    T.isScreenRequesting t
+
+                hasScreens =
+                    T.hasScreens t
+
+                hasWindows =
+                    T.hasWindows t
+
+                selectScreenDisabled =
+                    not hasScreens || waitingForConfirmation
+
+                selectWindowDisabled =
+                    not hasWindows || waitingForConfirmation
+
+                isPaused =
+                    T.isPaused t
+            in
+            div []
+                [ button [ onClick StopSharing ] [ text "Stop" ]
+                , button [ disabled selectScreenDisabled, onClick <| ToggleModal (Just ScreensTab) ] [ text "Select Screen" ]
+                , viewIf (T.isVNC t) <| button [ disabled selectWindowDisabled, onClick <| ToggleModal (Just WindowsTab) ] [ text "Select Window" ]
+
+                -- Modal
+                , viewIf (M.isOpen m) <|
+                    div []
+                        [ viewIf hasScreens (div [ onClick (ChangeModalTab ScreensTab) ] [ text "Screens" ])
+                        , viewIf hasWindows (div [ onClick (ChangeModalTab WindowsTab) ] [ text "Windows" ])
+                        , viewJust (M.getTab m) (\activeTab -> div [] (renderScreens t activeTab))
+                        ]
+
+                -- Canvas
+                , viewIf (T.hasActiveScreen t) <|
+                    if waitingForConfirmation then
+                        div [] [ text "Waiting for sharing confirmation..." ]
+
+                    else
+                        viewJust
+                            (T.getCurrentScreen t)
+                            (\c ->
+                                div []
+                                    [ button
+                                        [ disabled (T.isPauseWaiting t), onClick <| PauseToggle (Pause.getToggle isPaused) ]
+                                        [ text <| Pause.getText isPaused ]
+                                    , -- TODO: Canvas
+                                      div [] [ text c.title, div [] [ text "Canvas!" ] ]
+                                    ]
+                            )
+                ]
+
         -- TODO
         MobileSharing t ->
             div [] [ text "Mobile screen sharing:" ]
 
-        -- TODO
-        DesktopSharing t ->
-            div []
-                [ button [] [ text "Stop" ]
-                , text "Select screen / Select window"
-                ]
+
+renderScreen : ScreenSelectedData -> Html Msg
+renderScreen s =
+    div [ onClick <| ScreenSelected s ] [ text <| s.screen.title ++ " #" ++ s.screen.id ]
+
+
+renderScreens : Transmission -> ModalTab -> List (Html Msg)
+renderScreens t activeTab =
+    case activeTab of
+        ScreensTab ->
+            List.map (\screen -> renderScreen { screen = screen, isWindow = False }) (T.getScreens t)
+
+        WindowsTab ->
+            viewListJust
+                (T.getWindows t)
+                (\windows -> List.map (\window -> renderScreen { screen = window, isWindow = True }) windows)
 
 
 
@@ -142,7 +255,7 @@ requestSharingConfig =
 
 handleGotSharingConfig : List String -> ( Model, Cmd Msg )
 handleGotSharingConfig rawConfig =
-    case determinePriority rawConfig of
+    case P.determine rawConfig of
         Just p ->
             ( WaitingForStart { priority = p, error = Nothing }, Cmd.none )
 
@@ -158,7 +271,7 @@ startSharing : Priority -> Cmd Msg
 startSharing priority =
     Http.post
         { url = buildApiPath routes.sharingStart
-        , body = Http.jsonBody <| EncodeJson.string <| priorityToString priority
+        , body = Http.jsonBody <| EncodeJson.string <| P.toString priority
         , expect = getStartSharingExpect priority
         }
 
@@ -207,42 +320,97 @@ type alias ScreensAndWindows =
     { screens : List Screen, windows : List Screen }
 
 
-handleVNCConfirmed : ( Int, Priority ) -> ( Model, Cmd Msg )
-handleVNCConfirmed ( mobileFlag, priority ) =
+handleVNCConfirmed : ( Int, PriorityMap ) -> ( Model, Cmd Msg )
+handleVNCConfirmed ( mobileFlag, p ) =
     case mobileFlag of
         0 ->
-            ( LoadingScreens { priority = priority }, requestScreens )
+            ( LoadingScreens p, requestScreens )
 
         1 ->
-            handleTransmissionInit ( Transmission.init { mobile = True, screens = mobileScreens, windows = Nothing }, priority )
+            handleTransmissionInit ( T.init { mobile = True, screens = mobileScreens, windows = Nothing }, p )
 
         _ ->
-            ( WaitingForStart { priority = priority, error = Just "Can't determine the VNC platform." }, Cmd.none )
+            ( WaitingForStart { priority = p.priority, error = Just "Can't determine the VNC platform." }, Cmd.none )
 
 
-handleTransmissionInit : ( Maybe Transmission, Priority ) -> ( Model, Cmd Msg )
-handleTransmissionInit ( transmission, priority ) =
+handleTransmissionInit : ( Maybe Transmission, PriorityMap ) -> ( Model, Cmd Msg )
+handleTransmissionInit ( transmission, p ) =
     case transmission of
         Just t ->
-            ( if isMobile t then
-                MobileSharing t
+            ( if T.isMobile t then
+                MobileSharing { t = t, p = p }
 
               else
-                DesktopSharing t
+                DesktopSharing { t = t, m = M.init Nothing, p = p }
             , Cmd.none
             )
 
         Nothing ->
-            ( WaitingForStart { priority = priority, error = Just "Failed to init the Transmission." }, Cmd.none )
+            ( WaitingForStart { priority = p.priority, error = Just "Failed to init the Transmission." }, Cmd.none )
+
+
+handleScreenSelected : ScreenSelectedData -> DesktopSharingData -> ( Model, Cmd Msg )
+handleScreenSelected { screen, isWindow } { t, m, p } =
+    ( DesktopSharing
+        { t =
+            if isWindow then
+                T.startScreenSharing t screen
+
+            else
+                T.startWindowSharing t screen
+        , m = M.close m
+        , p = p
+        }
+    , if T.isVNC t then
+        requestSharingConfirm screen
+
+      else
+        Cmd.none
+    )
+
+
+stopSharing : Cmd Msg
+stopSharing =
+    Http.post
+        { url = buildApiPath routes.sharingStop
+        , body = Http.jsonBody (EncodeJson.object []) -- here should be userId / sessionId param
+        , expect = Http.expectWhatever StopConfirmed -- "assume it never fails"
+        }
 
 
 requestScreens : Cmd Msg
 requestScreens =
-    -- here should be userId param
+    -- here should be userId / sessionId param
     Http.get
         { url = buildApiPath routes.getScreens
         , expect = Http.expectJson GotScreens decodeScreens
         }
+
+
+requestSharingConfirm : Screen -> Cmd Msg
+requestSharingConfirm s =
+    Http.post
+        { url = buildApiPath routes.sharingConfirm
+        , body = Http.jsonBody <| encodeScreen s
+        , expect = Http.expectWhatever ScreenConfirmed -- "assume that it also never fails"
+        }
+
+
+requestPause : PauseToggle -> Cmd Msg
+requestPause p =
+    Http.post
+        { url = buildApiPath routes.pause
+        , body = Http.jsonBody (EncodeJson.string <| Pause.toggleToString p)
+        , expect = Http.expectWhatever (\_ -> PauseConfirmed p) -- "assume that this command never fails as well"
+        }
+
+
+encodeScreen : Screen -> EncodeJson.Value
+encodeScreen s =
+    EncodeJson.object
+        [ ( "id", EncodeJson.string s.id )
+        , ( "title", EncodeJson.string s.title )
+        ]
 
 
 decodeScreens : Decoder ScreensAndWindows

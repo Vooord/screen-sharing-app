@@ -17,14 +17,14 @@ type alias PriorityMap =
     WithPriority {}
 
 
-determinePriority : List String -> Maybe Priority
-determinePriority config =
+determine : List String -> Maybe Priority
+determine config =
     let
         webRtc =
-            priorityToString WebRTC
+            toString WebRTC
 
         vnc =
-            priorityToString VNC
+            toString VNC
     in
     case config of
         [ p1, p2 ] ->
@@ -51,8 +51,8 @@ determinePriority config =
             Nothing
 
 
-priorityToString : Priority -> String
-priorityToString p =
+toString : Priority -> String
+toString p =
     case p of
         WebRTC ->
             "WebRTC"

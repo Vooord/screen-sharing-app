@@ -15,5 +15,8 @@ routes =
     { currentRole = "current_role"
     , sharingCondig = "sharing_config"
     , sharingStart = "start_sharing"
+    , sharingStop = "stop_sharing"
     , getScreens = "screens"
+    , sharingConfirm = "sharing_confirm"
+    , pause = "pause"
     }
