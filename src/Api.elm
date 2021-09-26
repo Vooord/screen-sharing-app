@@ -1,9 +1,14 @@
-module Api exposing (buildApiPath, routes)
+port module Api exposing (buildApiPath, onScreensReceived, routes)
+
+import Stuff.Transmission exposing (Screen)
+
+
+port onScreensReceived : (List Screen -> msg) -> Sub msg
 
 
 apiHost : String
 apiHost =
-    "https://vord-elm1.free.beeceptor.com"
+    "https://vord1-elm.free.beeceptor.com"
 
 
 buildApiPath : String -> String

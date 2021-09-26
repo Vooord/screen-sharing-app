@@ -55,6 +55,9 @@ update msg model =
         ( GotPresenterMsg subMsg, PresenterModel subModel ) ->
             Tuple.mapBoth PresenterModel (Cmd.map GotPresenterMsg) <| Presenter.update subMsg subModel
 
+        ( GotParticipantMsg subMsg, ParticipantModel subModel ) ->
+            Tuple.mapBoth ParticipantModel (Cmd.map GotParticipantMsg) <| Participant.update subMsg subModel
+
         ( _, _ ) ->
             ( model, Cmd.none )
 
@@ -77,6 +80,26 @@ view model =
 
         ParticipantModel subModel ->
             Html.map GotParticipantMsg <| Participant.view subModel
+
+
+
+---- SUBSCRIPTIONS ----
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    case model of
+        ParticipantModel subModel ->
+            Sub.map GotParticipantMsg (Participant.subscriptions subModel)
+
+        PresenterModel _ ->
+            Sub.none
+
+        LoadingRole ->
+            Sub.none
+
+        RoleFailed _ ->
+            Sub.none
 
 
 
@@ -104,5 +127,5 @@ main =
         { view = view
         , init = \_ -> init
         , update = update
-        , subscriptions = always Sub.none
+        , subscriptions = subscriptions
         }
