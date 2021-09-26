@@ -12,7 +12,7 @@ import Stuff.Modal as M exposing (Modal, ModalTab(..))
 import Stuff.Pause as Pause exposing (PauseToggle)
 import Stuff.Priority as P exposing (Priority(..), PriorityMap, WithPriority)
 import Stuff.Transmission as T exposing (Screen, Transmission)
-import Stuff.Utils exposing (viewIf, viewJust, viewListJust)
+import Stuff.Utils exposing (viewIf, viewIfElse, viewJust, viewListJust)
 
 
 
@@ -25,8 +25,7 @@ type alias DesktopSharingData =
 
 type Model
     = LoadingConfig
-    | LoadingConfigFailed
-    | InvalidConfig
+    | ConfigFailed String
     | WaitingForStart (WithPriority { error : Maybe String })
     | LoadingStart PriorityMap
     | LoadingStop PriorityMap
@@ -58,7 +57,7 @@ type Msg
     | GotScreens (Result Http.Error ScreensAndWindows)
     | ToggleModal (Maybe ModalTab)
     | ChangeModalTab ModalTab
-    | ScreenSelected { screen : Screen, isWindow : Bool }
+    | ScreenSelected ScreenSelectedData
     | ScreenConfirmed (Result Http.Error ())
     | PauseToggle PauseToggle
     | PauseConfirmed PauseToggle
@@ -71,12 +70,15 @@ update msg model =
             handleGotSharingConfig sharingConfig
 
         ( GotSharingConfig (Err _), LoadingConfig ) ->
-            ( LoadingConfigFailed, Cmd.none )
+            ( ConfigFailed "Failed to load screen sharing config :(", Cmd.none )
 
         ( StartSharing, WaitingForStart { priority } ) ->
             ( LoadingStart { priority = priority }, startSharing priority )
 
         ( StopSharing, DesktopSharing { p } ) ->
+            ( LoadingStop p, stopSharing )
+
+        ( StopSharing, MobileSharing { p } ) ->
             ( LoadingStop p, stopSharing )
 
         ( StopConfirmed _, LoadingStop { priority } ) ->
@@ -132,21 +134,13 @@ view model =
         LoadingConfig ->
             div [] [ text "Loading sharing config..." ]
 
-        LoadingConfigFailed ->
-            div [] [ text "Failed to load screen sharing config :(" ]
-
-        InvalidConfig ->
-            div [] [ text "Can't determine the screen sharing config received from server :(" ]
+        ConfigFailed e ->
+            div [] [ text e ]
 
         WaitingForStart { priority, error } ->
             div []
                 [ button [ onClick StartSharing ] [ text "Start" ]
-                , case error of
-                    Just e ->
-                        div [] [ text <| e ++ " Please, try again." ]
-
-                    Nothing ->
-                        div [] []
+                , viewJust error (\e -> div [] [ text <| e ++ " Please, try again." ])
                 ]
 
         LoadingStart _ ->
@@ -183,9 +177,6 @@ view model =
 
                 selectWindowDisabled =
                     not hasWindows || waitingForConfirmation
-
-                isPaused =
-                    T.isPaused t
             in
             div []
                 [ button [ onClick StopSharing ] [ text "Stop" ]
@@ -200,28 +191,31 @@ view model =
                         , viewJust (M.getTab m) (\activeTab -> div [] (renderScreens t activeTab))
                         ]
 
-                -- Canvas
+                -- Sharing
                 , viewIf (T.hasActiveScreen t) <|
-                    if waitingForConfirmation then
-                        div [] [ text "Waiting for sharing confirmation..." ]
-
-                    else
-                        viewJust
-                            (T.getCurrentScreen t)
-                            (\c ->
-                                div []
-                                    [ button
-                                        [ disabled (T.isPauseWaiting t), onClick <| PauseToggle (Pause.getToggle isPaused) ]
-                                        [ text <| Pause.getText isPaused ]
-                                    , -- TODO: Canvas
-                                      div [] [ text c.title, div [] [ text "Canvas!" ] ]
-                                    ]
-                            )
+                    viewIfElse waitingForConfirmation (div [] [ text "Waiting for sharing confirmation..." ]) (renderSharing t)
                 ]
 
-        -- TODO
-        MobileSharing t ->
-            div [] [ text "Mobile screen sharing:" ]
+        MobileSharing { t } ->
+            renderSharing t
+
+
+renderSharing : Transmission -> Html Msg
+renderSharing t =
+    let
+        isPaused =
+            T.isPaused t
+    in
+    viewJust
+        (T.getCurrentScreen t)
+        (\c ->
+            div []
+                [ button
+                    [ disabled (T.isPauseWaiting t), onClick <| PauseToggle (Pause.getToggle isPaused) ]
+                    [ text <| Pause.getText isPaused ]
+                , div [] [ text c.title, canvas [] [ text "Here should be screen sharing..." ] ]
+                ]
+        )
 
 
 renderScreen : ScreenSelectedData -> Html Msg
@@ -260,7 +254,7 @@ handleGotSharingConfig rawConfig =
             ( WaitingForStart { priority = p, error = Nothing }, Cmd.none )
 
         Nothing ->
-            ( InvalidConfig, Cmd.none )
+            ( ConfigFailed "Can't determine the screen sharing config received from server :(", Cmd.none )
 
 
 

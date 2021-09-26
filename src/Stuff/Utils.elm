@@ -37,6 +37,15 @@ viewIf shouldDisplay view =
         empty
 
 
+viewIfElse : Bool -> Html msg -> Html msg -> Html msg
+viewIfElse shouldDisplay trueView falseView =
+    if shouldDisplay then
+        trueView
+
+    else
+        falseView
+
+
 nothingToBool : Maybe smt -> Bool
 nothingToBool smt =
     case smt of
