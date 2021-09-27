@@ -10,22 +10,12 @@ empty =
 
 viewJust : Maybe a -> (a -> Html msg) -> Html msg
 viewJust maybe fn =
-    case maybe of
-        Just a ->
-            fn a
-
-        Nothing ->
-            empty
+    Maybe.map fn maybe |> Maybe.withDefault empty
 
 
 viewListJust : Maybe a -> (a -> List (Html msg)) -> List (Html msg)
 viewListJust maybe fn =
-    case maybe of
-        Just a ->
-            fn a
-
-        Nothing ->
-            [ empty ]
+    Maybe.map fn maybe |> Maybe.withDefault [ empty ]
 
 
 viewIf : Bool -> Html msg -> Html msg
